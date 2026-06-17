@@ -10,5 +10,12 @@ GIT-WORKFLOW.md
 *.out
 coverage.*
 
+# VS Code — ignore personal stuff, but keep shared project config
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
 # OS / editor cruft
 .DS_Store
