@@ -1,0 +1,14 @@
+# Compiled binary (we build this from source; never commit it)
+/pulse
+
+# Learning guides — keep these local, don't push (makes the repo look like a real project)
+/lessons/
+CURRICULUM.md
+GIT-WORKFLOW.md
+
+# Test & coverage output
+*.out
+coverage.*
+
+# OS / editor cruft
+.DS_Store
