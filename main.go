@@ -1,22 +1,74 @@
 package main
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 )
 
 type Target struct {
-	Name string
-	URL  string
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 type Result struct {
-	Target     Target
-	StatusCode int
-	Up         bool
-	Latency    time.Duration
-	Err        error
+	Target     Target        `json:"target"`
+	StatusCode int           `json:"status_code"`
+	Up         bool          `json:"up"`
+	Latency    time.Duration `json:"-"`
+	LatencyMS  int64         `json:"latenyc_ms"`
+	Err        error         `json:"-"`
+	Error      string        `json:"error/omitempty"`
+}
+
+func (r Result) Status() string {
+	if r.Up {
+		return "UP"
+	}
+	return "DOWN"
+}
+
+func (r Result) String() string {
+	if r.Err != nil {
+		return fmt.Sprintf("%-4s %-8s   -  %4dms  %s   (%v)",
+			r.Status(), r.Target.Name, r.Latency.Milliseconds(), r.Target.URL, r.Err)
+	}
+	return fmt.Sprintf("%-4s %-8s %3d  %4dms  %s",
+		r.Status(), r.Target.Name, r.StatusCode, r.Latency.Milliseconds(), r.Target.URL)
+}
+
+type Reporter interface {
+	Report(results []Result) error
+}
+
+type textReporter struct{}
+
+func (textReporter) Report(results []Result) error {
+	up, down := 0, 0
+	for _, r := range results {
+		fmt.Println(r)
+		if r.Up {
+			up++
+		} else {
+			down++
+		}
+	}
+	fmt.Printf("%d up, %d down (%d total)\n", up, down, len(results))
+	return nil
+}
+
+type JSONReporter struct{}
+
+func (JSONReporter) Report(results []Result) error {
+	data, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
 }
 
 func isHealthy(code int) bool {
@@ -30,9 +82,11 @@ func check(t Target) Result {
 
 	if err != nil {
 		return Result{
-			Target:  t,
-			Latency: latency,
-			Err:     fmt.Errorf("request failed: %w", err),
+			Target:    t,
+			Latency:   latency,
+			LatencyMS: latency.Milliseconds(),
+			Err:       err,
+			Error:     err.Error(),
 		}
 	}
 	defer resp.Body.Close()
@@ -42,10 +96,14 @@ func check(t Target) Result {
 		StatusCode: resp.StatusCode,
 		Up:         isHealthy(resp.StatusCode),
 		Latency:    latency,
+		LatencyMS:  latency.Milliseconds(),
 	}
 }
 
 func main() {
+	format := flag.String("format", "text", "output format: text|json")
+	flag.Parse()
+
 	targets := []Target{
 		{
 			Name: "google",
@@ -59,10 +117,6 @@ func main() {
 			Name: "broken",
 			URL:  "https://httpstat.us/500",
 		},
-		{
-			Name: "dns-fail",
-			URL:  "https://nope-xyz.invalid",
-		},
 	}
 
 	var results []Result
@@ -71,22 +125,14 @@ func main() {
 		results = append(results, check(t))
 	}
 
-	counts := map[bool]int{}
-	for _, r := range results {
-		counts[r.Up]++
-		if r.Err != nil {
-			fmt.Printf("%-4s %-8s   -  %4dms  %s   (%v)\n",
-				"DOWN", r.Target.Name, r.Latency.Milliseconds(), r.Target.URL, r.Err)
-			continue
-		}
-		status := "DOWN"
-		if r.Up {
-			status = "UP"
-		}
-		fmt.Printf("%-4s %-8s %3d  %4dms  %s\n",
-			status, r.Target.Name, r.StatusCode, r.Latency.Milliseconds(), r.Target.URL)
-
+	var reporter Reporter = textReporter{}
+	if *format == "json" {
+		reporter = JSONReporter{}
 	}
-	fmt.Printf("%d up, %d down (%d total)\n", counts[true], counts[false], len(results))
+
+	if err := reporter.Report(results); err != nil {
+		fmt.Fprintln(os.Stderr, "report error:", err)
+		os.Exit(1)
+	}
 
 }
