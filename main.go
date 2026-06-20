@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -19,9 +20,9 @@ type Result struct {
 	StatusCode int           `json:"status_code"`
 	Up         bool          `json:"up"`
 	Latency    time.Duration `json:"-"`
-	LatencyMS  int64         `json:"latenyc_ms"`
+	LatencyMS  int64         `json:"latency_ms"`
 	Err        error         `json:"-"`
-	Error      string        `json:"error/omitempty"`
+	Error      string        `json:"error,omitempty"`
 }
 
 func (r Result) Status() string {
@@ -119,11 +120,19 @@ func main() {
 		},
 	}
 
-	var results []Result
+	start := time.Now()
 
-	for _, t := range targets {
-		results = append(results, check(t))
+	results := make([]Result, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = check(t)
+		}()
 	}
+	wg.Wait()
+	elapsed := time.Since(start)
 
 	var reporter Reporter = textReporter{}
 	if *format == "json" {
@@ -134,5 +143,5 @@ func main() {
 		fmt.Fprintln(os.Stderr, "report error:", err)
 		os.Exit(1)
 	}
-
+	fmt.Printf("checked %d targets in %s\n", len(targets), elapsed.Round(time.Millisecond))
 }
