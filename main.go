@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -76,9 +77,13 @@ func isHealthy(code int) bool {
 	return code >= 200 && code <= 399
 }
 
-func check(t Target) Result {
+func check(ctx context.Context, t Target) Result {
 	start := time.Now()
-	resp, err := http.Get(t.URL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.URL, nil)
+	if err != nil {
+		return Result{Target: t, Err: err, Error: err.Error()}
+	}
+	resp, err := http.DefaultClient.Do(req)
 	latency := time.Since(start)
 
 	if err != nil {
@@ -101,37 +106,49 @@ func check(t Target) Result {
 	}
 }
 
-func main() {
-	format := flag.String("format", "text", "output format: text|json")
-	flag.Parse()
+func runChecks(ctx context.Context, targets []Target, timeout time.Duration, workers int) []Result {
+	jobs := make(chan Target, len(targets))
+	resultsCh := make(chan Result, len(targets))
 
-	targets := []Target{
-		{
-			Name: "google",
-			URL:  "https://google.com",
-		},
-		{
-			Name: "github",
-			URL:  "https://github.com",
-		},
-		{
-			Name: "broken",
-			URL:  "https://httpstat.us/500",
-		},
-	}
-
-	start := time.Now()
-
-	results := make([]Result, len(targets))
 	var wg sync.WaitGroup
-	for i, t := range targets {
+	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = check(t)
+			for t := range jobs {
+				reqctx, cancel := context.WithTimeout(ctx, timeout)
+				resultsCh <- check(reqctx, t)
+				cancel()
+			}
 		}()
 	}
-	wg.Wait()
+
+	for _, t := range targets {
+		jobs <- t
+	}
+	close(jobs)
+	go func() { wg.Wait(); close(resultsCh) }()
+
+	var results []Result
+	for r := range resultsCh {
+		results = append(results, r)
+	}
+	return results
+}
+
+func main() {
+	format := flag.String("format", "text", "output format: text|json")
+	timeout := flag.Duration("timeout", 5*time.Second, "per-request timeout")
+	concurrency := flag.Int("concurrency", 8, "max parallel checks")
+	flag.Parse()
+
+	targets := []Target{
+		{Name: "google", URL: "https://google.com"},
+		{Name: "slow", URL: "https://httpstat.us/200?sleep=10000"},
+	}
+
+	start := time.Now()
+	results := runChecks(context.Background(), targets, *timeout, *concurrency)
 	elapsed := time.Since(start)
 
 	var reporter Reporter = textReporter{}
